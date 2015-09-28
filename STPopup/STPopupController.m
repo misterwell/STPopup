@@ -250,7 +250,11 @@ static NSMutableSet *_retainedPopupControllers;
     }
 }
 
-- (void)transitFromViewController:(UIViewController *)fromViewController toViewController:(UIViewController *)toViewController animated:(BOOL)animated
+- (void)transitFromViewController:(UIViewController *)fromViewController toViewController:(UIViewController *)toViewController animated:(BOOL)animated {
+    return [self transitFromViewController:fromViewController toViewController:toViewController animated:animated transitionStyle:STPopupTransitionStylePushFromLeft];
+}
+
+- (void)transitFromViewController:(UIViewController *)fromViewController toViewController:(UIViewController *)toViewController animated:(BOOL)animated transitionStyle:(STPopupNavigationTransitionStyle)style
 {
     [fromViewController beginAppearanceTransition:NO animated:animated];
     [toViewController beginAppearanceTransition:YES animated:animated];
@@ -380,7 +384,7 @@ static NSMutableSet *_retainedPopupControllers;
         }
     }
     _defaultLeftBarItem.tintColor = _navigationBar.tintColor;
-    [_defaultLeftBarItem setType:_viewControllers.count > 1 ? STPopupLeftBarItemArrow : STPopupLeftBarItemCross animated:animated];
+    [_defaultLeftBarItem setType:_myViewControllers.count > 1 ? STPopupLeftBarItemArrow : STPopupLeftBarItemCross animated:animated];
 }
 
 - (void)setNavigationBarHidden:(BOOL)navigationBarHidden
