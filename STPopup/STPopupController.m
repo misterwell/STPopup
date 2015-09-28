@@ -12,6 +12,11 @@
 #import "UIViewController+STPopup.h"
 #import "UIResponder+STPopup.h"
 
+typedef NS_ENUM(NSUInteger, STPopupNavigationTransitionStyle) {
+    STPopupTransitionStylePushFromLeft,
+    STPopupTransitionStylePopFromRight
+};
+
 static NSMutableSet *_retainedPopupControllers;
 
 @interface STPopupContainerViewController : UIViewController
@@ -47,7 +52,7 @@ static NSMutableSet *_retainedPopupControllers;
 @implementation STPopupController
 {
     STPopupContainerViewController *_containerViewController;
-    NSMutableArray *_viewControllers; // <UIViewController>
+    NSMutableArray *_myViewControllers; // <UIViewController>
     UIView *_bgView;
     UIView *_containerView;
     UIView *_contentView;
@@ -84,7 +89,7 @@ static NSMutableSet *_retainedPopupControllers;
 - (void)dealloc
 {
     [self destroyObservers];
-    for (UIViewController *viewController in _viewControllers) { // Avoid crash when try to access unsafe unretained property
+    for (UIViewController *viewController in _myViewControllers) { // Avoid crash when try to access unsafe unretained property
         [viewController setValue:nil forKey:@"popupController"];
         [self destroyObserversOfViewController:viewController];
     }
@@ -201,25 +206,36 @@ static NSMutableSet *_retainedPopupControllers;
     }];
 }
 
+- (NSArray *)viewControllers {
+    return _myViewControllers.copy;
+}
+
+- (void)setViewControllers:(NSArray *)viewControllers {
+    if (![viewControllers isEqual:_myViewControllers]) {
+        _myViewControllers = viewControllers.mutableCopy;
+        [_myViewControllers setValue:self forKeyPath:@"popupController"];
+    }
+}
+
 - (void)pushViewController:(UIViewController *)viewController animated:(BOOL)animated
 {
-    if (!_viewControllers) {
-        _viewControllers = [NSMutableArray new];
+    if (!_myViewControllers) {
+        _myViewControllers = [NSMutableArray new];
     }
     
     UIViewController *topViewController = [self topViewController];
     [viewController setValue:self forKey:@"popupController"];
-    [_viewControllers addObject:viewController];
+    [_myViewControllers addObject:viewController];
     
     if (self.presented) {
-        [self transitFromViewController:topViewController toViewController:viewController animated:animated];
+        [self transitFromViewController:topViewController toViewController:viewController animated:animated transitionStyle:STPopupTransitionStylePushFromLeft];
     }
     [self setupObserversForViewController:viewController];
 }
 
 - (void)popViewControllerAnimated:(BOOL)animated
 {
-    if (_viewControllers.count <= 1) {
+    if (_myViewControllers.count <= 1) {
         [self dismiss];
         return;
     }
@@ -227,7 +243,7 @@ static NSMutableSet *_retainedPopupControllers;
     UIViewController *topViewController = [self topViewController];
     [topViewController setValue:nil forKey:@"popupController"];
     [self destroyObserversOfViewController:topViewController];
-    [_viewControllers removeObject:topViewController];
+    [_myViewControllers removeObject:topViewController];
     
     if (self.presented) {
         [self transitFromViewController:topViewController toViewController:[self topViewController] animated:animated];
@@ -257,12 +273,27 @@ static NSMutableSet *_retainedPopupControllers;
         [fromViewController.view removeFromSuperview];
         
         _containerView.userInteractionEnabled = NO;
-        toViewController.view.alpha = 0;
+        
+        CGRect fromTransitionFrame = fromViewController.view.frame;
+        CGFloat xOffset = (style == STPopupTransitionStylePushFromLeft ? CGRectGetWidth(fromTransitionFrame) : -CGRectGetWidth(fromTransitionFrame));
+        fromTransitionFrame.origin.x -= xOffset;
+        
+        // Not sure why this needs to be done... but otherwise the bar isn't acounted for.
+        fromTransitionFrame.origin.y += CGRectGetHeight(_navigationBar.frame);
+        
+        CGRect toOriginFrame = _containerView.bounds;
+        toOriginFrame.origin.x += xOffset;
+        CGRect newToFrame = toViewController.view.frame;
+        toViewController.view.frame = toOriginFrame;
+        
         [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
             [self layoutContainerView];
             [_contentView addSubview:toViewController.view];
-            capturedView.alpha = 0;
-            toViewController.view.alpha = 1;
+            
+            capturedView.frame = fromTransitionFrame;
+            toViewController.view.frame = newToFrame;
+//            capturedView.alpha = 0;
+//            toViewController.view.alpha = 1;
             [_containerViewController setNeedsStatusBarAppearanceUpdate];
         } completion:^(BOOL finished) {
             [capturedView removeFromSuperview];
@@ -381,7 +412,7 @@ static NSMutableSet *_retainedPopupControllers;
 
 - (UIViewController *)topViewController
 {
-    return _viewControllers.lastObject;
+    return _myViewControllers.lastObject;
 }
 
 #pragma mark - UI layout
