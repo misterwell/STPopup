@@ -91,7 +91,6 @@ static NSMutableSet *_retainedPopupControllers;
     [self destroyObservers];
     for (UIViewController *viewController in _myViewControllers) { // Avoid crash when try to access unsafe unretained property
         [viewController setValue:nil forKey:@"popupController"];
-        [self destroyObserversOfViewController:viewController];
     }
 }
 
@@ -182,6 +181,8 @@ static NSMutableSet *_retainedPopupControllers;
     [self setupObservers];
 
     [_retainedPopupControllers addObject:self];
+    
+    [self setupObserversForViewController:_myViewControllers.firstObject];
     [viewController presentViewController:_containerViewController animated:YES completion:completion];
 }
 
@@ -197,6 +198,7 @@ static NSMutableSet *_retainedPopupControllers;
     }
 
     [self destroyObservers];
+    [self destroyObserversOfViewController:_myViewControllers.firstObject];
 
     [_containerViewController dismissViewControllerAnimated:YES completion:^{
         [_retainedPopupControllers removeObject:self];
@@ -230,7 +232,6 @@ static NSMutableSet *_retainedPopupControllers;
     if (self.presented) {
         [self transitFromViewController:topViewController toViewController:viewController animated:animated transitionStyle:STPopupTransitionStylePushFromLeft];
     }
-    [self setupObserversForViewController:viewController];
 }
 
 - (void)popViewControllerAnimated:(BOOL)animated
@@ -242,7 +243,6 @@ static NSMutableSet *_retainedPopupControllers;
 
     UIViewController *topViewController = [self topViewController];
     [topViewController setValue:nil forKey:@"popupController"];
-    [self destroyObserversOfViewController:topViewController];
     [_myViewControllers removeObject:topViewController];
 
     if (self.presented) {
@@ -324,6 +324,13 @@ static NSMutableSet *_retainedPopupControllers;
 
         [fromViewController endAppearanceTransition];
         [toViewController endAppearanceTransition];
+    }
+    
+    if (fromViewController) {
+        [self destroyObserversOfViewController:fromViewController];
+    }
+    if (toViewController) {
+        [self setupObserversForViewController:toViewController];
     }
 }
 
