@@ -16,6 +16,7 @@ typedef NS_ENUM(NSUInteger, STPopupTransitionStyle) {
 
 @interface STPopupController : NSObject
 
+@property (nonatomic, assign) NSArray *viewControllers;
 @property (nonatomic, assign) STPopupTransitionStyle transitionStyle;
 @property (nonatomic, assign) CGFloat cornerRadius;
 @property (nonatomic, assign) BOOL navigationBarHidden;
@@ -34,4 +35,5 @@ typedef NS_ENUM(NSUInteger, STPopupTransitionStyle) {
 
 - (void)setNavigationBarHidden:(BOOL)navigationBarHidden animated:(BOOL)animated;
 
+- (void)updateNavigationBarAniamted:(BOOL)animated;
 @end

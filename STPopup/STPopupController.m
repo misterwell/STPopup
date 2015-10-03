@@ -12,6 +12,11 @@
 #import "UIViewController+STPopup.h"
 #import "UIResponder+STPopup.h"
 
+typedef NS_ENUM(NSUInteger, STPopupNavigationTransitionStyle) {
+    STPopupTransitionStylePushFromLeft,
+    STPopupTransitionStylePopFromRight
+};
+
 static NSMutableSet *_retainedPopupControllers;
 
 @interface STPopupContainerViewController : UIViewController
@@ -47,7 +52,7 @@ static NSMutableSet *_retainedPopupControllers;
 @implementation STPopupController
 {
     STPopupContainerViewController *_containerViewController;
-    NSMutableArray *_viewControllers; // <UIViewController>
+    NSMutableArray *_myViewControllers; // <UIViewController>
     UIView *_bgView;
     UIView *_containerView;
     UIView *_contentView;
@@ -84,9 +89,8 @@ static NSMutableSet *_retainedPopupControllers;
 - (void)dealloc
 {
     [self destroyObservers];
-    for (UIViewController *viewController in _viewControllers) { // Avoid crash when try to access unsafe unretained property
+    for (UIViewController *viewController in _myViewControllers) { // Avoid crash when try to access unsafe unretained property
         [viewController setValue:nil forKey:@"popupController"];
-        [self destroyObserversOfViewController:viewController];
     }
 }
 
@@ -103,19 +107,19 @@ static NSMutableSet *_retainedPopupControllers;
         return;
     }
     _observing = YES;
-    
+
     // Observe navigation bar
     [_navigationBar addObserver:self forKeyPath:NSStringFromSelector(@selector(tintColor)) options:NSKeyValueObservingOptionNew context:nil];
     [_navigationBar addObserver:self forKeyPath:NSStringFromSelector(@selector(titleTextAttributes)) options:NSKeyValueObservingOptionNew context:nil];
-    
+
     // Observe orientation change
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(orientationDidChange) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
-    
+
     // Observe keyboard
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillChangeFrameNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
-    
+
     // Observe responder change
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(firstResponderDidChange) name:STPopupFirstResponderDidChangeNotification object:nil];
 }
@@ -126,7 +130,7 @@ static NSMutableSet *_retainedPopupControllers;
         return;
     }
     _observing = NO;
-    
+
     [_navigationBar removeObserver:self forKeyPath:NSStringFromSelector(@selector(tintColor))];
     [_navigationBar removeObserver:self forKeyPath:NSStringFromSelector(@selector(titleTextAttributes))];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -173,10 +177,12 @@ static NSMutableSet *_retainedPopupControllers;
     if (self.presented) {
         return;
     }
-    
+
     [self setupObservers];
-    
+
     [_retainedPopupControllers addObject:self];
+    
+    [self setupObserversForViewController:_myViewControllers.firstObject];
     [viewController presentViewController:_containerViewController animated:YES completion:completion];
 }
 
@@ -190,9 +196,10 @@ static NSMutableSet *_retainedPopupControllers;
     if (!self.presented) {
         return;
     }
-    
+
     [self destroyObservers];
-    
+    [self destroyObserversOfViewController:[self topViewController]];
+
     [_containerViewController dismissViewControllerAnimated:YES completion:^{
         [_retainedPopupControllers removeObject:self];
         if (completion) {
@@ -201,76 +208,104 @@ static NSMutableSet *_retainedPopupControllers;
     }];
 }
 
+- (NSArray *)viewControllers {
+    return _myViewControllers.copy;
+}
+
+- (void)setViewControllers:(NSArray *)viewControllers {
+    if (![viewControllers isEqual:_myViewControllers]) {
+        _myViewControllers = viewControllers.mutableCopy;
+        [_myViewControllers setValue:self forKeyPath:@"popupController"];
+    }
+}
+
 - (void)pushViewController:(UIViewController *)viewController animated:(BOOL)animated
 {
-    if (!_viewControllers) {
-        _viewControllers = [NSMutableArray new];
+    if (!_myViewControllers) {
+        _myViewControllers = [NSMutableArray new];
     }
-    
+
     UIViewController *topViewController = [self topViewController];
     [viewController setValue:self forKey:@"popupController"];
-    [_viewControllers addObject:viewController];
-    
+    [_myViewControllers addObject:viewController];
+
     if (self.presented) {
-        [self transitFromViewController:topViewController toViewController:viewController animated:animated];
+        [self transitFromViewController:topViewController toViewController:viewController animated:animated transitionStyle:STPopupTransitionStylePushFromLeft];
     }
-    [self setupObserversForViewController:viewController];
 }
 
 - (void)popViewControllerAnimated:(BOOL)animated
 {
-    if (_viewControllers.count <= 1) {
+    if (_myViewControllers.count <= 1) {
         [self dismiss];
         return;
     }
-    
+
     UIViewController *topViewController = [self topViewController];
     [topViewController setValue:nil forKey:@"popupController"];
-    [self destroyObserversOfViewController:topViewController];
-    [_viewControllers removeObject:topViewController];
-    
+    [_myViewControllers removeObject:topViewController];
+
     if (self.presented) {
-        [self transitFromViewController:topViewController toViewController:[self topViewController] animated:animated];
+        [self transitFromViewController:topViewController toViewController:[self topViewController] animated:animated transitionStyle:STPopupTransitionStylePopFromRight];
     }
 }
 
-- (void)transitFromViewController:(UIViewController *)fromViewController toViewController:(UIViewController *)toViewController animated:(BOOL)animated
+- (void)transitFromViewController:(UIViewController *)fromViewController toViewController:(UIViewController *)toViewController animated:(BOOL)animated {
+    return [self transitFromViewController:fromViewController toViewController:toViewController animated:animated transitionStyle:STPopupTransitionStylePushFromLeft];
+}
+
+- (void)transitFromViewController:(UIViewController *)fromViewController toViewController:(UIViewController *)toViewController animated:(BOOL)animated transitionStyle:(STPopupNavigationTransitionStyle)style
 {
     [fromViewController beginAppearanceTransition:NO animated:animated];
     [toViewController beginAppearanceTransition:YES animated:animated];
-    
+
     [fromViewController willMoveToParentViewController:nil];
     [_containerViewController addChildViewController:toViewController];
-    
+
     if (animated) {
         // Capture view in "fromViewController" to avoid "viewWillAppear" and "viewDidAppear" being called.
         UIGraphicsBeginImageContextWithOptions(fromViewController.view.bounds.size, NO, [UIScreen mainScreen].scale);
         [fromViewController.view drawViewHierarchyInRect:fromViewController.view.bounds afterScreenUpdates:NO];
 
         UIImageView *capturedView = [[UIImageView alloc] initWithImage:UIGraphicsGetImageFromCurrentImageContext()];
-        
+
         UIGraphicsEndImageContext();
-        
+
         capturedView.frame = CGRectMake(_contentView.frame.origin.x, _contentView.frame.origin.y, fromViewController.view.bounds.size.width, fromViewController.view.bounds.size.height);
         [_containerView insertSubview:capturedView atIndex:0];
         
         [fromViewController.view removeFromSuperview];
-        
+
         _containerView.userInteractionEnabled = NO;
-        toViewController.view.alpha = 0;
+
+        CGRect fromTransitionFrame = fromViewController.view.frame;
+        CGFloat xOffset = (style == STPopupTransitionStylePushFromLeft ? CGRectGetWidth(fromTransitionFrame) : -CGRectGetWidth(fromTransitionFrame));
+        fromTransitionFrame.origin.x -= xOffset;
+
+        // Not sure why this needs to be done... but otherwise the bar isn't acounted for.
+        fromTransitionFrame.origin.y += CGRectGetHeight(_navigationBar.frame);
+
+        CGRect toOriginFrame = _containerView.bounds;
+        toOriginFrame.origin.x += xOffset;
+        CGRect newToFrame = toViewController.view.frame;
+        toViewController.view.frame = toOriginFrame;
+
         [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
             [self layoutContainerView];
             [_contentView addSubview:toViewController.view];
-            capturedView.alpha = 0;
-            toViewController.view.alpha = 1;
+
+            capturedView.frame = fromTransitionFrame;
+            toViewController.view.frame = newToFrame;
+//            capturedView.alpha = 0;
+//            toViewController.view.alpha = 1;
             [_containerViewController setNeedsStatusBarAppearanceUpdate];
         } completion:^(BOOL finished) {
             [capturedView removeFromSuperview];
             [fromViewController removeFromParentViewController];
-            
+
             _containerView.userInteractionEnabled = YES;
             [toViewController didMoveToParentViewController:_containerViewController];
-            
+
             [fromViewController endAppearanceTransition];
             [toViewController endAppearanceTransition];
         }];
@@ -281,14 +316,21 @@ static NSMutableSet *_retainedPopupControllers;
         [_contentView addSubview:toViewController.view];
         [_containerViewController setNeedsStatusBarAppearanceUpdate];
         [self updateNavigationBarAniamted:animated];
-        
+
         [fromViewController.view removeFromSuperview];
         [fromViewController removeFromParentViewController];
-        
+
         [toViewController didMoveToParentViewController:_containerViewController];
-        
+
         [fromViewController endAppearanceTransition];
         [toViewController endAppearanceTransition];
+    }
+    
+    if (fromViewController) {
+        [self destroyObserversOfViewController:fromViewController];
+    }
+    if (toViewController) {
+        [self setupObserversForViewController:toViewController];
     }
 }
 
@@ -299,7 +341,7 @@ static NSMutableSet *_retainedPopupControllers;
     _navigationBar.items = @[ [UINavigationItem new] ];
     _navigationBar.topItem.leftBarButtonItems = topViewController.navigationItem.leftBarButtonItems ? : (topViewController.navigationItem.hidesBackButton ? nil : @[ _defaultLeftBarItem ]);
     _navigationBar.topItem.rightBarButtonItems = topViewController.navigationItem.rightBarButtonItems;
-    
+
     if (animated) {
         UIView *fromTitleView, *toTitleView;
         if (lastTitleView == _defaultTitleLabel)    {
@@ -313,7 +355,7 @@ static NSMutableSet *_retainedPopupControllers;
         else {
             fromTitleView = lastTitleView;
         }
-        
+
         if (topViewController.navigationItem.titleView) {
             toTitleView = topViewController.navigationItem.titleView;
         }
@@ -324,11 +366,11 @@ static NSMutableSet *_retainedPopupControllers;
             [_defaultTitleLabel sizeToFit];
             toTitleView = _defaultTitleLabel;
         }
-        
+
         [_navigationBar addSubview:fromTitleView];
         _navigationBar.topItem.titleView = toTitleView;
         toTitleView.alpha = 0;
-        
+
         [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
             fromTitleView.alpha = 0;
             toTitleView.alpha = 1;
@@ -349,7 +391,7 @@ static NSMutableSet *_retainedPopupControllers;
         }
     }
     _defaultLeftBarItem.tintColor = _navigationBar.tintColor;
-    [_defaultLeftBarItem setType:_viewControllers.count > 1 ? STPopupLeftBarItemArrow : STPopupLeftBarItemCross animated:animated];
+    [_defaultLeftBarItem setType:_myViewControllers.count > 1 ? STPopupLeftBarItemArrow : STPopupLeftBarItemCross animated:animated];
 }
 
 - (void)setNavigationBarHidden:(BOOL)navigationBarHidden
@@ -361,13 +403,13 @@ static NSMutableSet *_retainedPopupControllers;
 {
     _navigationBarHidden = navigationBarHidden;
     _navigationBar.alpha = navigationBarHidden ? 1 : 0;
-    
+
     if (!animated) {
         [self layoutContainerView];
         _navigationBar.hidden = navigationBarHidden;
         return;
     }
-    
+
     if (!navigationBarHidden) {
         _navigationBar.hidden = navigationBarHidden;
     }
@@ -381,7 +423,7 @@ static NSMutableSet *_retainedPopupControllers;
 
 - (UIViewController *)topViewController
 {
-    return _viewControllers.lastObject;
+    return _myViewControllers.lastObject;
 }
 
 #pragma mark - UI layout
@@ -389,18 +431,18 @@ static NSMutableSet *_retainedPopupControllers;
 - (void)layoutContainerView
 {
     _bgView.frame = _containerViewController.view.bounds;
- 
+
     CGFloat preferredNavigationBarHeight = [self preferredNavigationBarHeight];
     CGFloat navigationBarHeight = _navigationBarHidden ? 0 : preferredNavigationBarHeight;
     CGSize contentSizeOfTopView = [self contentSizeOfTopView];
     CGSize containerViewSize = CGSizeMake(contentSizeOfTopView.width, contentSizeOfTopView.height + navigationBarHeight);
-    
+
     _containerView.frame = CGRectMake((_containerViewController.view.bounds.size.width - containerViewSize.width) / 2,
                                       (_containerViewController.view.bounds.size.height - containerViewSize.height) / 2,
                                       containerViewSize.width, containerViewSize.height);
     _navigationBar.frame = CGRectMake(0, 0, containerViewSize.width, preferredNavigationBarHeight);
     _contentView.frame = CGRectMake(0, navigationBarHeight, contentSizeOfTopView.width, contentSizeOfTopView.height);
-    
+
     UIViewController *topViewController = [self topViewController];
     topViewController.view.frame = _contentView.bounds;
 }
@@ -423,9 +465,9 @@ static NSMutableSet *_retainedPopupControllers;
         }
             break;
     }
-    
+
     NSAssert(!CGSizeEqualToSize(contentSize, CGSizeZero), @"contentSizeInPopup should not be size zero.");
-    
+
     return contentSize;
 }
 
@@ -465,7 +507,7 @@ static NSMutableSet *_retainedPopupControllers;
     _containerView.backgroundColor = [UIColor whiteColor];
     _containerView.clipsToBounds = YES;
     [_containerViewController.view addSubview:_containerView];
-    
+
     _contentView = [UIView new];
     [_containerView addSubview:_contentView];
 }
@@ -474,10 +516,10 @@ static NSMutableSet *_retainedPopupControllers;
 {
     STPopupNavigationBar *navigationBar = [STPopupNavigationBar new];
     navigationBar.touchEventDelegate = self;
-    
+
     _navigationBar = navigationBar;
     [_containerView addSubview:_navigationBar];
-    
+
     _defaultTitleLabel = [UILabel new];
     _defaultLeftBarItem = [[STPopupLeftBarItem alloc] initWithTarget:self action:@selector(leftBarItemDidTap)];
 }
@@ -530,7 +572,7 @@ static NSMutableSet *_retainedPopupControllers;
     if (!currentTextInput) {
         return;
     }
-    
+
     _keyboardInfo = notification.userInfo;
     [self adjustContainerViewOrigin];
 }
@@ -538,17 +580,17 @@ static NSMutableSet *_retainedPopupControllers;
 - (void)keyboardWillHide:(NSNotification *)notification
 {
     _keyboardInfo = nil;
-    
+
     NSTimeInterval duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
     UIViewAnimationCurve curve = [notification.userInfo[UIKeyboardAnimationCurveUserInfoKey] intValue];
-    
+
     [UIView beginAnimations:nil context:NULL];
     [UIView setAnimationBeginsFromCurrentState:YES];
     [UIView setAnimationCurve:curve];
     [UIView setAnimationDuration:duration];
-    
+
     _containerView.transform = CGAffineTransformIdentity;
-    
+
     [UIView commitAnimations];
 }
 
@@ -557,15 +599,15 @@ static NSMutableSet *_retainedPopupControllers;
     if (!_keyboardInfo) {
         return;
     }
-    
+
     UIView<UIKeyInput> *currentTextInput = [self getCurrentTextInputInView:_containerView];
     if (!currentTextInput) {
         return;
     }
-    
+
     CGAffineTransform lastTransform = _containerView.transform;
     _containerView.transform = CGAffineTransformIdentity; // Set transform to identity for calculating a correct "minOffsetY"
-    
+
     CGFloat textFieldBottomY = [currentTextInput convertPoint:CGPointZero toView:_containerViewController.view].y + currentTextInput.bounds.size.height;
     CGFloat keyboardHeight = [_keyboardInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue].size.height;
     // For iOS 7
@@ -574,15 +616,15 @@ static NSMutableSet *_retainedPopupControllers;
         (orientation == UIInterfaceOrientationLandscapeLeft || orientation == UIInterfaceOrientationLandscapeRight)) {
         keyboardHeight = [_keyboardInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue].size.width;
     }
-    
+
     CGFloat spacing = 5;
     CGFloat offsetY = _containerView.frame.origin.y + _containerView.bounds.size.height - (_containerViewController.view.bounds.size.height - keyboardHeight - spacing);
     if (offsetY <= 0) { // _containerView can be totally shown, so no need to reposition
         return;
     }
-    
+
     CGFloat statusBarHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
-    
+
     if (_containerView.frame.origin.y - offsetY < statusBarHeight) { // _containerView will be covered by status bar if it is repositioned with "offsetY"
         offsetY = _containerView.frame.origin.y - statusBarHeight;
         // currentTextField can not be totally shown if _containerView is going to repositioned with "offsetY"
@@ -590,19 +632,19 @@ static NSMutableSet *_retainedPopupControllers;
             offsetY = textFieldBottomY - (_containerViewController.view.bounds.size.height - keyboardHeight - spacing);
         }
     }
-    
+
     NSTimeInterval duration = [_keyboardInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
     UIViewAnimationCurve curve = [_keyboardInfo[UIKeyboardAnimationCurveUserInfoKey] intValue];
-    
+
     _containerView.transform = lastTransform; // Restore transform
-    
+
     [UIView beginAnimations:nil context:NULL];
     [UIView setAnimationBeginsFromCurrentState:YES];
     [UIView setAnimationCurve:curve];
     [UIView setAnimationDuration:duration];
-    
+
     _containerView.transform = CGAffineTransformMakeTranslation(0, -offsetY);
-    
+
     [UIView commitAnimations];
 }
 
@@ -611,7 +653,7 @@ static NSMutableSet *_retainedPopupControllers;
     if ([view conformsToProtocol:@protocol(UIKeyInput)] && view.isFirstResponder) {
         return (UIView<UIKeyInput> *)view;
     }
-    
+
     for (UIView *subview in view.subviews) {
         UIView<UIKeyInput> *view = [self getCurrentTextInputInView:subview];
         if (view) {
@@ -659,24 +701,24 @@ static NSMutableSet *_retainedPopupControllers;
 {
     UIViewController *fromViewController = [transitionContext viewControllerForKey:UITransitionContextFromViewControllerKey];
     UIViewController *toViewController = [transitionContext viewControllerForKey:UITransitionContextToViewControllerKey];
-    
+
     toViewController.view.frame = fromViewController.view.frame;
-    
+
     UIViewController *topViewController = [self topViewController];
-    
+
     if (toViewController == _containerViewController) {
         [fromViewController beginAppearanceTransition:NO animated:YES];
-        
+
         [[transitionContext containerView] addSubview:toViewController.view];
-        
+
         [topViewController beginAppearanceTransition:YES animated:YES];
         [toViewController addChildViewController:topViewController];
-        
+
         [self layoutContainerView];
         [_contentView addSubview:topViewController.view];
         [toViewController setNeedsStatusBarAppearanceUpdate];
         [self updateNavigationBarAniamted:NO];
-        
+
         switch (self.transitionStyle) {
             case STPopupTransitionStyleFade: {
                 _containerView.alpha = 0;
@@ -691,7 +733,7 @@ static NSMutableSet *_retainedPopupControllers;
                 break;
         }
         _bgView.alpha = 0;
-        
+
         _containerView.userInteractionEnabled = NO;
         [UIView animateWithDuration:[self transitionDuration:transitionContext] delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
             _bgView.alpha = 1;
@@ -700,18 +742,18 @@ static NSMutableSet *_retainedPopupControllers;
         } completion:^(BOOL finished) {
             _containerView.userInteractionEnabled = YES;
             [transitionContext completeTransition:![transitionContext transitionWasCancelled]];
-            
+
             [topViewController didMoveToParentViewController:toViewController];
-            
+
             [fromViewController endAppearanceTransition];
         }];
     }
     else {
         [toViewController beginAppearanceTransition:YES animated:YES];
-        
+
         [topViewController beginAppearanceTransition:NO animated:YES];
         [topViewController willMoveToParentViewController:nil];
-        
+
         _containerView.userInteractionEnabled = NO;
         [UIView animateWithDuration:[self transitionDuration:transitionContext] delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
             _bgView.alpha = 0;
@@ -732,10 +774,10 @@ static NSMutableSet *_retainedPopupControllers;
             _containerView.transform = CGAffineTransformIdentity;
             [fromViewController.view removeFromSuperview];
             [transitionContext completeTransition:![transitionContext transitionWasCancelled]];
-            
+
             [topViewController.view removeFromSuperview];
             [topViewController removeFromParentViewController];
-    
+
             [toViewController endAppearanceTransition];
         }];
     }
