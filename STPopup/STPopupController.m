@@ -198,7 +198,7 @@ static NSMutableSet *_retainedPopupControllers;
     }
 
     [self destroyObservers];
-    [self destroyObserversOfViewController:_myViewControllers.lastObject];
+    [self destroyObserversOfViewController:[self topViewController]];
 
     [_containerViewController dismissViewControllerAnimated:YES completion:^{
         [_retainedPopupControllers removeObject:self];
